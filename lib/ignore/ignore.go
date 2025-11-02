@@ -205,9 +205,43 @@ func (m *Matcher) Parse(r io.Reader, file string) error {
 }
 
 func (m *Matcher) parseLocked(r io.Reader, file string) error {
-	lines, patterns, err := parseIgnoreFile(m.fs, r, file, m.changeDetector, make(map[string]struct{}))
+	linesSeen := make(map[string]struct{})
+
+	// Load global .stignore first (if current file is .stignore)
+	var globalPatterns []Pattern
+	if file == ".stignore" {
+		globalIgnorePath := getGlobalIgnorePath()
+		if globalIgnorePath != "" {
+			globalDir := filepath.Dir(globalIgnorePath)
+			globalFile := filepath.Base(globalIgnorePath)
+			globalFS := newGlobalFilesystem(globalDir)
+
+			// Directly parse global .stignore without using the main ChangeDetector
+			// to avoid the "multiple include" error when multiple folders
+			// try to load the same global file. We want each folder to
+			// always get the latest global .stignore when it rescans.
+			fd, info, err := loadIgnoreFile(globalFS, globalFile)
+			if err == nil {
+				defer fd.Close()
+				// Create a temporary ChangeDetector for global .stignore
+				// This ensures each folder gets a fresh load without cross-folder interference
+				globalCD := newModtimeChecker()
+				globalCD.Remember(globalFS, globalFile, info.ModTime())
+				_, globalPatterns, err = parseIgnoreFile(globalFS, fd, globalFile, globalCD, linesSeen)
+				// Silently ignore errors - global .stignore is optional
+				_ = err
+			}
+		}
+	}
+
+	lines, patterns, err := parseIgnoreFile(m.fs, r, file, m.changeDetector, linesSeen)
 	// Error is saved and returned at the end. We process the patterns
 	// (possibly blank) anyway.
+
+	// Merge global patterns with project patterns (global first)
+	if len(globalPatterns) > 0 {
+		patterns = append(globalPatterns, patterns...)
+	}
 
 	m.lines = lines
 
@@ -494,6 +528,31 @@ func nativeUnicodeNorm(s string) string {
 		return norm.NFD.String(s)
 	}
 	return norm.NFC.String(s)
+}
+
+// getGlobalIgnorePath returns the path to global .stignore file
+// Returns empty string if not found or not accessible
+func getGlobalIgnorePath() string {
+	// Try to get user's home directory
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	// Global .stignore location: ~/.config/syncthing/.stignore
+	globalPath := filepath.Join(home, ".config", "syncthing", ".stignore")
+
+	// Check if file exists and is readable
+	if _, err := os.Stat(globalPath); err == nil {
+		return globalPath
+	}
+
+	return ""
+}
+
+// newGlobalFilesystem creates a basic filesystem for the global .stignore directory
+func newGlobalFilesystem(path string) fs.Filesystem {
+	return fs.NewFilesystem(fs.FilesystemTypeBasic, path)
 }
 
 func parseIgnoreFile(fs fs.Filesystem, fd io.Reader, currentFile string, cd ChangeDetector, linesSeen map[string]struct{}) ([]string, []Pattern, error) {
