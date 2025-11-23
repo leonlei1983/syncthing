@@ -339,7 +339,18 @@ upstream  https://github.com/syncthing/syncthing.git # 官方倉庫
 **版本基線**:
 - Fork 基於: v2.0.10 (官方穩定版)
 - Fork 版本: v2.0.10+global1 (加上全域 .stignore 功能)
-- 官方 Tags: 已複製到此 repo (共 900+ tags)
+- 官方 Tags: 已複製到此 repo (共 660+ tags)
+
+### 初始設置 (一次性)
+
+需要 upstream remote 和官方 tags：
+```bash
+git remote add upstream https://github.com/syncthing/syncthing.git
+git fetch upstream --tags
+git push origin --tags
+```
+
+這樣 Claude Agent 可以查看完整的官方版本歷史（支援 `git diff v2.0.10 v2.0.11` 等操作）。
 
 ### Claude Agent 工作流程
 
@@ -401,27 +412,26 @@ Claude Agent 應生成包含以下內容的 markdown 報告:
 3. [優先級] 測試計劃
 ```
 
-#### 4. 嘗試合併 (如果安全)
+#### 4. 執行合併
 
 ```bash
-# 創建新的 branch 進行測試
 git checkout -b merge-test-upstream
-
-# 嘗試合併官方最新版本
 git merge upstream/main
 
-# 如果有衝突:
-# 1. 檢查 lib/ignore/ignore.go - 手動保留 Fork 的 global .stignore 功能
-# 2. 檢查 go.mod - 更新依賴版本
-# 3. 使用 git status 查看所有衝突檔案
+# 如果有衝突，保留 Fork 的 global .stignore 函數
+# (getGlobalIgnorePath、newGlobalFilesystem、parseLocked 邏輯)
 
-# 解決衝突後:
-git add .
-git commit -m "Merge upstream v2.0.10 into fork (keep global .stignore)"
-
-# 驗證合併後的代碼
+# 編譯驗證
 go run build.go build
 ./syncthing --version
+
+# 確認全域 .stignore 功能完整
+grep "getGlobalIgnorePath" lib/ignore/ignore.go
+
+# 如果成功，合併回 main 並推送
+git checkout main
+git merge merge-test-upstream
+git push origin main
 ```
 
 ### 同步頻率建議
@@ -446,6 +456,14 @@ go run build.go build
 # ├─ merge-test-upstream    # 測試合併前先檢查
 # └─ feature/*              # 新功能開發
 ```
+
+### 實際執行案例 (2025-11-23)
+
+成功合併：quic-go v0.52.0 → v0.56.0，全域 .stignore 功能完整保留，編譯成功，已推送至 GitHub。
+
+無衝突合併的原因：官方的 QUIC 更新不與我們的全域 .stignore 代碼衝突；Fork 的所有客製功能自動保留。
+
+---
 
 ### 常見問題處理
 
